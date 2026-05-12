@@ -18,6 +18,8 @@ app.use(express.json()); // Parse JSON request bodies
 // Routes
 app.use("/api/auth", require("./routes/authRoutes"));
 
+app.use("/api/resumes", require("./routes/resumeRoutes"));
+
 // Health check route
 app.get("/", (req, res) => {
   res.json({ message: "CVPilot API is running" });
