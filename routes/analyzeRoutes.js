@@ -72,12 +72,12 @@ Analyze the resume and return a JSON object with EXACTLY this structure (no extr
     });
 
     if (!response.ok) {
-      const errText = await response.text();
-      console.error("Gemini API error:", errText);
-      return res.status(500).json({ message: "Gemini API error", detail: errText });
-    }
-
-    const data = await response.json();
+        const errText = await response.text();
+        console.error("Gemini API error:", errText);
+        return res.status(500).json({ message: "Gemini API error", detail: errText });
+      }
+      const data = await response.json();
+      console.log("Gemini raw response:", JSON.stringify(data).substring(0, 500));
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
     // Clean and parse JSON
