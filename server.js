@@ -17,8 +17,8 @@ app.use(express.json()); // Parse JSON request bodies
 
 // Routes
 app.use("/api/auth", require("./routes/authRoutes"));
-
 app.use("/api/resumes", require("./routes/resumeRoutes"));
+app.use("/api/analyze", require("./routes/analyzeRoutes")); // ← ADD THIS
 
 // Health check route
 app.get("/", (req, res) => {
