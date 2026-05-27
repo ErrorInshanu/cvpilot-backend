@@ -1,16 +1,35 @@
 const express = require("express");
 const router = express.Router();
 const Groq = require("groq-sdk");
+const pdfParse = require("pdf-parse");
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 router.post("/", async (req, res) => {
   try {
-    const { resumeText, jobDescription } = req.body;
+    const { resumePdfBase64, jobDescription } = req.body;
 
-    if (!resumeText) {
-      return res.status(400).json({ message: "Resume text is required" });
+    if (!resumePdfBase64) {
+      return res.status(400).json({ message: "Resume PDF is required" });
     }
+
+    // Convert base64 to buffer and extract text
+    const pdfBuffer = Buffer.from(resumePdfBase64, "base64");
+    let resumeText = "";
+    try {
+      const pdfData = await pdfParse(pdfBuffer);
+      resumeText = pdfData.text?.trim() || "";
+    } catch (e) {
+      console.error("PDF parse error:", e);
+      return res.status(400).json({ message: "Could not read PDF. Please try a different file." });
+    }
+
+    if (!resumeText || resumeText.length < 50) {
+      return res.status(400).json({ message: "Could not extract text from PDF. Please try a different file." });
+    }
+
+    // Limit text length
+    resumeText = resumeText.substring(0, 8000);
 
     const prompt = `You are an expert ATS resume analyzer and career coach. Analyze the following resume thoroughly.
 
@@ -53,9 +72,8 @@ Return a JSON object with EXACTLY this structure (no extra text, no markdown, ju
     });
 
     const rawText = completion.choices[0]?.message?.content || "";
-
-    // Clean and parse JSON
     const cleaned = rawText.replace(/```json|```/g, "").trim();
+
     let analysis;
     try {
       analysis = JSON.parse(cleaned);
