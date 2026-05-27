@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Groq = require("groq-sdk");
-const pdfParse = require("pdf-parse");
+const PDFParser = require("pdf2json");
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -13,23 +13,36 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Resume PDF is required" });
     }
 
-    // Convert base64 to buffer and extract text
+    // Convert base64 to buffer
     const pdfBuffer = Buffer.from(resumePdfBase64, "base64");
+
+    // Extract text using pdf2json
     let resumeText = "";
     try {
-      const pdfData = await pdfParse(pdfBuffer);
-      resumeText = pdfData.text?.trim() || "";
+      resumeText = await new Promise((resolve, reject) => {
+        const pdfParser = new PDFParser();
+        pdfParser.on("pdfParser_dataReady", (pdfData) => {
+          const text = pdfData.Pages?.map(page =>
+            page.Texts?.map(t =>
+              decodeURIComponent(t.R?.map(r => r.T).join(""))
+            ).join(" ")
+          ).join("\n") || "";
+          resolve(text.trim());
+        });
+        pdfParser.on("pdfParser_dataError", reject);
+        pdfParser.parseBuffer(pdfBuffer);
+      });
     } catch (e) {
       console.error("PDF parse error:", e);
       return res.status(400).json({ message: "Could not read PDF. Please try a different file." });
     }
 
     if (!resumeText || resumeText.length < 50) {
-      return res.status(400).json({ message: "Could not extract text from PDF. Please try a different file." });
+      return res.status(400).json({ message: "Could not extract text from PDF." });
     }
 
-    // Limit text length
     resumeText = resumeText.substring(0, 8000);
+    console.log("Extracted text preview:", resumeText.substring(0, 200));
 
     const prompt = `You are an expert ATS resume analyzer and career coach. Analyze the following resume thoroughly.
 
