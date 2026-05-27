@@ -1,22 +1,25 @@
 const express = require("express");
 const router = express.Router();
+const Groq = require("groq-sdk");
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
 router.post("/", async (req, res) => {
   try {
-    const { resumePdfBase64, jobDescription } = req.body;
+    const { resumeText, jobDescription } = req.body;
 
-    if (!resumePdfBase64) {
-      return res.status(400).json({ message: "Resume PDF is required" });
+    if (!resumeText) {
+      return res.status(400).json({ message: "Resume text is required" });
     }
 
-    const prompt = `You are an expert ATS resume analyzer and career coach. Analyze the provided resume PDF thoroughly.
+    const prompt = `You are an expert ATS resume analyzer and career coach. Analyze the following resume thoroughly.
 
 ${jobDescription ? `The user is applying for this role:\n${jobDescription}\n` : "Perform a general resume analysis."}
 
-Analyze the resume and return a JSON object with EXACTLY this structure (no extra text, just JSON):
+RESUME TEXT:
+${resumeText}
 
+Return a JSON object with EXACTLY this structure (no extra text, no markdown, just pure JSON):
 {
   "atsScore": <number 0-100>,
   "verdict": "<one of: Excellent | Good | Needs Work | Major Issues>",
@@ -42,42 +45,14 @@ Analyze the resume and return a JSON object with EXACTLY this structure (no extr
   "strengths": ["strength1", "strength2"]
 }`;
 
-    const geminiBody = {
-      contents: [
-        {
-          parts: [
-            {
-              inline_data: {
-                mime_type: "application/pdf",
-                data: resumePdfBase64,
-              },
-            },
-            {
-              text: prompt,
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 2048,
-      },
-    };
-
-    const response = await fetch(GEMINI_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(geminiBody),
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      max_tokens: 2048,
     });
 
-    if (!response.ok) {
-        const errText = await response.text();
-        console.error("Gemini API error:", errText);
-        return res.status(500).json({ message: "Gemini API error", detail: errText });
-      }
-      const data = await response.json();
-      console.log("Gemini raw response:", JSON.stringify(data).substring(0, 500));
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const rawText = completion.choices[0]?.message?.content || "";
 
     // Clean and parse JSON
     const cleaned = rawText.replace(/```json|```/g, "").trim();
