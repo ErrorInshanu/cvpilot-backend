@@ -21,14 +21,22 @@ router.post("/", async (req, res) => {
     try {
       resumeText = await new Promise((resolve, reject) => {
         const pdfParser = new PDFParser();
+
         pdfParser.on("pdfParser_dataReady", (pdfData) => {
           const text = pdfData.Pages?.map(page =>
-            page.Texts?.map(t =>
-              decodeURIComponent(t.R?.map(r => r.T).join(""))
-            ).join(" ")
+            page.Texts?.map(t => {
+              // Safe decodeURIComponent — won't crash on malformed PDF text
+              try {
+                return decodeURIComponent(t.R?.map(r => r.T).join(""));
+              } catch {
+                return t.R?.map(r => r.T).join("") || "";
+              }
+            }).join(" ")
           ).join("\n") || "";
+
           resolve(text.trim());
         });
+
         pdfParser.on("pdfParser_dataError", reject);
         pdfParser.parseBuffer(pdfBuffer);
       });
@@ -45,12 +53,9 @@ router.post("/", async (req, res) => {
     console.log("Extracted text preview:", resumeText.substring(0, 200));
 
     const prompt = `You are an expert ATS resume analyzer and career coach. Analyze the following resume thoroughly.
-
 ${jobDescription ? `The user is applying for this role:\n${jobDescription}\n` : "Perform a general resume analysis."}
-
 RESUME TEXT:
 ${resumeText}
-
 Return a JSON object with EXACTLY this structure (no extra text, no markdown, just pure JSON):
 {
   "atsScore": <number 0-100>,
@@ -96,6 +101,7 @@ Return a JSON object with EXACTLY this structure (no extra text, no markdown, ju
     }
 
     return res.json({ success: true, analysis });
+
   } catch (error) {
     console.error("Analyze route error:", error);
     return res.status(500).json({ message: "Server error", error: error.message });

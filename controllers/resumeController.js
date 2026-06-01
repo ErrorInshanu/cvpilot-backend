@@ -73,11 +73,13 @@ const updateResume = async (req, res) => {
     }
 
     // Update all fields sent from the app
-    const updatedResume = await Resume.findByIdAndUpdate(
-      req.params.id,
-      { $set: req.body },
-      { new: true, runValidators: true }
-    );
+    const { _id, __v, userId, createdAt, updatedAt, ...safeBody } = req.body;
+
+const updatedResume = await Resume.findByIdAndUpdate(
+  req.params.id,
+  { $set: safeBody },
+  { returnDocument: "after", runValidators: true }
+);
 
     return res.status(200).json(updatedResume);
   } catch (error) {
