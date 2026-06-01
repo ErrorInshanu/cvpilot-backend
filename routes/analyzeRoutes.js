@@ -5,6 +5,56 @@ const PDFParser = require("pdf2json");
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// ─── Clean spaced-out PDF text ────────────────────────────────────────────────
+// Handles: "S h a n u", "c o m", "0 8 / 2023", "B C A" etc.
+function cleanPdfText(text) {
+  return text
+    // Fix single letters separated by spaces: "S h a n u" → "Shanu"
+    .replace(/\b([a-zA-Z])\s(?=[a-zA-Z]\s|[a-zA-Z]\b)/g, "$1")
+    // Fix spaced digits in years/dates: "0 8 / 2 0 2 3" → "08/2023"
+    .replace(/(\d)\s(?=\d)/g, "$1")
+    // Fix common spaced patterns like "@ gmail" → "@gmail" and "g m a i l" → "gmail"
+    .replace(/\s@\s/g, "@")
+    .replace(/\s\.\s/g, ".")
+    // Collapse multiple spaces
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+// ─── Call Groq with retry ─────────────────────────────────────────────────────
+async function callGroq(prompt, retries = 2) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          {
+            role: "system",
+            content: "You are a JSON-only API. You must always respond with valid JSON and nothing else. No markdown, no backticks, no explanation. Only a raw JSON object.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 2048,
+      });
+
+      const raw = completion.choices[0]?.message?.content || "";
+      const stripped = raw.replace(/```json|```/g, "").trim();
+      const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+
+      console.warn(`Attempt ${i + 1}: No JSON found in response, retrying...`);
+    } catch (e) {
+      console.warn(`Attempt ${i + 1} failed:`, e.message);
+      if (i === retries - 1) throw e;
+    }
+  }
+  throw new Error("Failed to get valid JSON from Groq after retries");
+}
+
 router.post("/", async (req, res) => {
   try {
     const { resumePdfBase64, jobDescription } = req.body;
@@ -16,16 +66,15 @@ router.post("/", async (req, res) => {
     // Convert base64 to buffer
     const pdfBuffer = Buffer.from(resumePdfBase64, "base64");
 
-    // Extract text using pdf2json
-    let resumeText = "";
+    // ── Extract text using pdf2json ──
+    let rawText = "";
     try {
-      resumeText = await new Promise((resolve, reject) => {
+      rawText = await new Promise((resolve, reject) => {
         const pdfParser = new PDFParser();
 
         pdfParser.on("pdfParser_dataReady", (pdfData) => {
           const text = pdfData.Pages?.map(page =>
             page.Texts?.map(t => {
-              // Safe decodeURIComponent — won't crash on malformed PDF text
               try {
                 return decodeURIComponent(t.R?.map(r => r.T).join(""));
               } catch {
@@ -45,76 +94,46 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Could not read PDF. Please try a different file." });
     }
 
-    // ── Clean up spaced-out text from certain PDF types ──
-    // Some PDFs produce "S h a n u   S i n g h" instead of "Shanu Singh"
-    // This regex detects runs of single characters separated by spaces and joins them
-    resumeText = resumeText
-      .replace(/(?<!\w)((\w)\s){3,}(\w)(?!\w)/g, match => match.replace(/\s/g, ""))
-      .replace(/\s{2,}/g, " ")
-      .trim();
+    // ── Clean the extracted text ──
+    const resumeText = cleanPdfText(rawText).substring(0, 8000);
+    console.log("Cleaned text preview:", resumeText.substring(0, 300));
 
     if (!resumeText || resumeText.length < 50) {
       return res.status(400).json({ message: "Could not extract text from PDF. Please try a text-based PDF." });
     }
 
-    resumeText = resumeText.substring(0, 8000);
-    console.log("Extracted text preview:", resumeText.substring(0, 200));
+    // ── Build prompt ──
+    const prompt = `Analyze this resume and return ONLY a JSON object. No text before or after the JSON.
 
-    const prompt = `You are an expert ATS resume analyzer and career coach. Analyze the following resume thoroughly.
-${jobDescription ? `The user is applying for this role:\n${jobDescription}\n` : "Perform a general resume analysis."}
-RESUME TEXT:
-${resumeText}
-Return a JSON object with EXACTLY this structure. Return ONLY the JSON, no extra text, no markdown, no backticks before or after:
+${jobDescription ? `Job Description:\n${jobDescription}\n\n` : ""}Resume:\n${resumeText}
+
+Return this exact JSON structure:
 {
   "atsScore": <number 0-100>,
-  "verdict": "<one of: Excellent | Good | Needs Work | Major Issues>",
-  "verdictMessage": "<one sentence summary>",
+  "verdict": "<Excellent | Good | Needs Work | Major Issues>",
+  "verdictMessage": "<one sentence>",
   "matchedKeywords": ["keyword1", "keyword2"],
   "missingKeywords": ["keyword1", "keyword2"],
-  "grammarIssues": [
-    {
-      "original": "<weak phrase found in resume>",
-      "suggestion": "<stronger alternative>",
-      "reason": "<why this is better>"
-    }
-  ],
+  "grammarIssues": [{"original": "weak phrase", "suggestion": "better phrase", "reason": "why"}],
   "sectionFeedback": {
-    "summary": "<feedback string>",
-    "experience": "<feedback string>",
-    "education": "<feedback string>",
-    "skills": "<feedback string>",
-    "overall": "<feedback string>"
+    "summary": "<feedback>",
+    "experience": "<feedback>",
+    "education": "<feedback>",
+    "skills": "<feedback>",
+    "overall": "<feedback>"
   },
-  "improvements": ["improvement1", "improvement2"],
+  "improvements": ["item1", "item2"],
   "whatToRemove": ["item1", "item2"],
-  "strengths": ["strength1", "strength2"]
+  "strengths": ["item1", "item2"]
 }`;
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
-      max_tokens: 2048,
-    });
-
-    const rawText = completion.choices[0]?.message?.content || "";
-
-    // ── Robust JSON extraction ──
-    // Strip markdown fences if present, then find the JSON object
-    const stripped = rawText.replace(/```json|```/g, "").trim();
-    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-
-    if (!jsonMatch) {
-      console.error("No JSON found in response:", rawText);
-      return res.status(500).json({ message: "Failed to parse analysis. Please try again.", raw: rawText });
-    }
-
+    // ── Call Groq with retry ──
     let analysis;
     try {
-      analysis = JSON.parse(jsonMatch[0]);
+      analysis = await callGroq(prompt);
     } catch (e) {
-      console.error("JSON parse error:", e.message, "\nRaw:", rawText);
-      return res.status(500).json({ message: "Failed to parse analysis. Please try again.", raw: rawText });
+      console.error("Groq error after retries:", e.message);
+      return res.status(500).json({ message: "Analysis failed. Please try again." });
     }
 
     return res.json({ success: true, analysis });
