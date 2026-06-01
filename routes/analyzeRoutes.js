@@ -45,8 +45,16 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Could not read PDF. Please try a different file." });
     }
 
+    // ── Clean up spaced-out text from certain PDF types ──
+    // Some PDFs produce "S h a n u   S i n g h" instead of "Shanu Singh"
+    // This regex detects runs of single characters separated by spaces and joins them
+    resumeText = resumeText
+      .replace(/(?<!\w)((\w)\s){3,}(\w)(?!\w)/g, match => match.replace(/\s/g, ""))
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
     if (!resumeText || resumeText.length < 50) {
-      return res.status(400).json({ message: "Could not extract text from PDF." });
+      return res.status(400).json({ message: "Could not extract text from PDF. Please try a text-based PDF." });
     }
 
     resumeText = resumeText.substring(0, 8000);
@@ -56,7 +64,7 @@ router.post("/", async (req, res) => {
 ${jobDescription ? `The user is applying for this role:\n${jobDescription}\n` : "Perform a general resume analysis."}
 RESUME TEXT:
 ${resumeText}
-Return a JSON object with EXACTLY this structure (no extra text, no markdown, just pure JSON):
+Return a JSON object with EXACTLY this structure. Return ONLY the JSON, no extra text, no markdown, no backticks before or after:
 {
   "atsScore": <number 0-100>,
   "verdict": "<one of: Excellent | Good | Needs Work | Major Issues>",
@@ -90,14 +98,23 @@ Return a JSON object with EXACTLY this structure (no extra text, no markdown, ju
     });
 
     const rawText = completion.choices[0]?.message?.content || "";
-    const cleaned = rawText.replace(/```json|```/g, "").trim();
+
+    // ── Robust JSON extraction ──
+    // Strip markdown fences if present, then find the JSON object
+    const stripped = rawText.replace(/```json|```/g, "").trim();
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+
+    if (!jsonMatch) {
+      console.error("No JSON found in response:", rawText);
+      return res.status(500).json({ message: "Failed to parse analysis. Please try again.", raw: rawText });
+    }
 
     let analysis;
     try {
-      analysis = JSON.parse(cleaned);
+      analysis = JSON.parse(jsonMatch[0]);
     } catch (e) {
-      console.error("JSON parse error:", e, rawText);
-      return res.status(500).json({ message: "Failed to parse analysis", raw: rawText });
+      console.error("JSON parse error:", e.message, "\nRaw:", rawText);
+      return res.status(500).json({ message: "Failed to parse analysis. Please try again.", raw: rawText });
     }
 
     return res.json({ success: true, analysis });
