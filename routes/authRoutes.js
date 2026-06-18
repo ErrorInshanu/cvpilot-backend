@@ -7,12 +7,14 @@ const {
   updateProfile,
   changePassword,
   deleteAccount,
+  googleAuth,
 } = require("../controllers/authController");
 const { protect } = require("../middleware/authMiddleware");
 
 // Public routes
-router.post("/signup", signup);
-router.post("/login",  login);
+router.post("/signup",  signup);
+router.post("/login",   login);
+router.post("/google",  googleAuth); // ← Google OAuth
 
 // Protected routes
 router.get("/me",          protect, getMe);
