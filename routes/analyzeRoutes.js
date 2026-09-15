@@ -1,3 +1,4 @@
+const { protect } = require("../middleware/authMiddleware");
 const express = require("express");
 const router = express.Router();
 const Groq = require("groq-sdk");
@@ -55,7 +56,7 @@ async function callGroq(prompt, retries = 2) {
   throw new Error("Failed to get valid JSON from Groq after retries");
 }
 
-router.post("/", async (req, res) => {
+router.post("/", protect, async (req, res) => {
   try {
     const { resumePdfBase64, jobDescription } = req.body;
 
